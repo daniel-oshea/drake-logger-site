@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drake Logger</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1b2430;--mute:#5d6b7a;--line:#d9dee5;--ecmwf:#1f6fd1;--ecmwf-new:#0f9d8f;--gfs:#d9701a;--bad:#b3261e;--ok:#1a7f45;--warn:#9a6700}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#10151b;--card:#18202a;--ink:#e6ebf1;--mute:#98a6b5;--line:#2c3743;--ecmwf:#6aa8ff;--ecmwf-new:#4fd1c5;--gfs:#f0a050;--bad:#ff8a80;--ok:#5fd08a;--warn:#e3b341}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:0 16px 32px}
+header{padding:20px 0 8px}
+h1{font-size:22px;margin:0}
+h2{font-size:17px;margin:0 0 8px}
+.sub{color:var(--mute);font-size:13px;margin-top:2px}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:14px 0}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:8px}
+label{font-size:13px;color:var(--mute)}
+select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:4px 6px;max-width:100%}
+.chart{width:100%;min-height:200px}
+.chart h3{font-size:13px;color:var(--mute);margin:10px 0 2px;font-weight:600}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td.why{white-space:normal;min-width:160px}
+th{color:var(--mute);font-weight:600}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.note{color:var(--mute);font-size:13px}
+.runs div{margin:1px 0}
+.key{display:inline-block;width:18px;height:3px;vertical-align:middle;margin:0 4px 0 10px}
+details>summary{cursor:pointer;margin:6px 0}
+footer{color:var(--mute);font-size:12px;padding:6px 0 0}
+a{color:var(--ecmwf)}
+#err{display:none;color:var(--bad)}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Drake Logger</h1>
+  <div class="sub">Archived Open-Meteo wave and wind forecasts, Ushuaia to the Antarctic Peninsula. <span id="gen"></span></div>
+</header>
+<p id="err">Could not load summary.json or the chart library. Check the connection and reload.</p>
+
+<section id="latest">
+  <h2>Latest forecast</h2>
+  <div class="row">
+    <label>Location <select id="loc"></select></label>
+    <span class="note"><span class="key" style="background:var(--ecmwf)"></span>ECMWF latest 00z/12z run<span class="key" style="background:var(--ecmwf-new)"></span>newer 06z/18z run<span class="key" style="background:var(--gfs)"></span>GFS &middot; times UTC</span>
+  </div>
+  <div class="note runs" id="runs"></div>
+  <div class="chart" id="c-hs"><h3>Significant wave height (m)</h3></div>
+  <div class="chart" id="c-per"><h3>Period (s): GFS swell period; ECMWF mean wave period (no swell split). Gaps = no swell / no data</h3></div>
+  <div class="chart" id="c-wind"><h3>Wind speed (kn), gusts dashed</h3></div>
+</section>
+
+<section id="fan">
+  <h2>Forecast fan</h2>
+  <div class="note">How successive runs predicted one valid time as lead time shortened. Compare how fast ECMWF and GFS converge.</div>
+  <div class="row" style="margin-top:8px">
+    <label>Variable <select id="fvar"><option value="marine.wave_height">Wave height (m)</option><option value="forecast.wind_speed_10m">Wind speed (kn)</option></select></label>
+    <label>Valid time (UTC) <select id="fvalid"></select></label>
+  </div>
+  <div class="chart" id="c-fan"></div>
+  <div class="note" id="fan-note"></div>
+</section>
+
+<section id="status">
+  <h2>Status</h2>
+  <div class="tbl"><table id="hosts"><thead><tr><th>Host</th><th>Last fetch</th><th>Last complete</th><th>Fetches (24 h)</th><th>Last result</th></tr></thead><tbody></tbody></table></div>
+
+  <h2 style="margin-top:14px">Data completeness</h2>
+  <div class="note" id="comp-note"></div>
+  <details id="comp-details"><summary>Per model and location: newest run, valid steps, nulls, requests (24 h)</summary>
+    <div class="tbl"><table id="comp"><thead><tr><th>Model</th><th>Location</th><th>Newest run</th><th>Age</th><th>Valid steps</th><th>Horizon</th><th>Nulls</th><th>Req ok/fail/skip</th><th>Problems</th></tr></thead><tbody></tbody></table></div>
+    <div class="note" id="comp-foot"></div>
+  </details>
+
+  <h2 style="margin-top:14px">Gaps</h2>
+  <div class="note" id="gap-note"></div>
+  <div class="tbl"><table id="gaps"><thead><tr><th>Model</th><th>From run</th><th>To run</th><th>Missing runs</th></tr></thead><tbody></tbody></table></div>
+</section>
+
+<section id="analysis">
+  <h2>Post-trip analysis</h2>
+  <div class="note">Placeholder. After the voyage this section will show forecast error against ERA5 reanalysis by lead time, for each model and location.</div>
+</section>
+
+<footer>
+  Weather data by <a href="https://open-meteo.com/">Open-Meteo.com</a>, licensed
+  <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. Non-commercial use.
+  Forecast archive and dashboard code: MIT.
+</footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  var S = null, charts = {}, fanCache = {};
+  var NAMES = { ecmwf_wam025: 'ECMWF WAM', ncep_gfswave025: 'GFS-Wave', ecmwf_ifs025: 'ECMWF IFS', gfs_seamless: 'GFS' };
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var $ = function (id) { return document.getElementById(id); };
+  var css = function (n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); };
+  var utc = function (t) { return uPlot.tzDate(new Date(t * 1000), 'Etc/UTC'); };
+  var fmtT = function (t) { return new Date(t * 1000).toISOString().slice(5, 16).replace('T', ' '); };
+  var fmtIso = function (s) { return s ? s.replace('T', ' ').replace('Z', '').slice(5, 16) : 'never'; };
+  var ageH = function (iso) { return iso ? (Date.now() - Date.parse(iso.slice(0, 16) + ':00Z')) / 36e5 : null; };
+  var fmtRun = function (iso) { var d = new Date(Date.parse(iso.slice(0, 16) + ':00Z')); return ('0' + d.getUTCHours()).slice(-2) + 'z ' + d.getUTCDate() + ' ' + MON[d.getUTCMonth()]; };
+  var days = function (h) { return h == null ? '' : (h / 24).toFixed(1) + ' d'; };
+
+  function mk(id, x, ys, opts) {
+    var el = $(id);
+    if (charts[id]) { charts[id].destroy(); delete charts[id]; }
+    var axis = function (extra) {
+      var a = { stroke: css('--mute'), grid: { stroke: css('--line') }, ticks: { stroke: css('--line') } };
+      for (var k in extra) a[k] = extra[k];
+      return a;
+    };
+    var o = {
+      width: el.clientWidth, height: 200, tzDate: utc, legend: { show: true },
+      cursor: { sync: { key: opts.sync || id } },
+      scales: { x: { time: !opts.num } },
+      axes: [axis(opts.xvals ? { values: opts.xvals } : {}), axis({})],
+      series: [{}].concat(ys.map(function (s) {
+        // spanGaps stays false: null breaks the line (a real gap); undefined is spanned
+        // (a step the run structurally does not have), see the fan chart.
+        return { label: s.label, stroke: css(s.color), width: s.width || 1.6, dash: s.dash, spanGaps: false,
+                 points: opts.points ? { show: true, size: 5, fill: css(s.color) } : { show: false } };
+      }))
+    };
+    charts[id] = new uPlot(o, [x].concat(ys.map(function (s) { return s.data; })), el);
+  }
+
+  function clear(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+  // ---- latest forecast ----------------------------------------------------------
+  function runLines(L) {
+    var box = $('runs'); box.innerHTML = '';
+    var keys = Object.keys(L.runs);
+    var any = false;
+    keys.forEach(function (k) {
+      var r = L.runs[k], name = NAMES[k.split('.')[1]], div = document.createElement('div'), parts = [];
+      if (r.long) parts.push(fmtRun(r.long) + ' run, ' + days(r.long_h) + ' ahead');
+      if (r.short) parts.push('newer ' + fmtRun(r.short) + ' run, ' + days(r.short_h) + ' ahead');
+      if (!parts.length) parts.push('no run archived');
+      else any = true;
+      div.textContent = name + ': ' + parts.join(' · ');
+      box.appendChild(div);
+    });
+    return any;
+  }
+
+  function renderLatest() {
+    var loc = $('loc').value, L = S.latest[loc], s = L.s;
+    var any = runLines(L);
+    if (!any || !L.t.length) { ['c-hs', 'c-per', 'c-wind'].forEach(clear); return; }
+    var lines = function (specs) {
+      return specs.filter(function (sp) { return s[sp.key] && s[sp.key].some(function (v) { return v !== null; }); })
+        .map(function (sp) {
+          var r = L.runs[sp.run], ts = sp.short ? r.short : r.long;
+          return { label: sp.label + (ts ? ' ' + fmtRun(ts) : ''), color: sp.short ? '--ecmwf-new' : sp.color, dash: sp.dash,
+                   width: sp.short ? 2.2 : 1.6, data: s[sp.key] };
+        });
+    };
+    var W = 'marine.ecmwf_wam025', G = 'marine.ncep_gfswave025', I = 'forecast.ecmwf_ifs025', F = 'forecast.gfs_seamless';
+    mk('c-hs', L.t, lines([
+      { key: W + '.wave_height', run: W, label: 'ECMWF WAM', color: '--ecmwf' },
+      { key: W + '.wave_height|short', run: W, short: 1, label: 'ECMWF WAM' },
+      { key: G + '.wave_height', run: G, label: 'GFS-Wave', color: '--gfs' }]), { sync: 'loc' });
+    mk('c-per', L.t, lines([
+      { key: W + '.wave_period', run: W, label: 'ECMWF mean period', color: '--ecmwf' },
+      { key: W + '.wave_period|short', run: W, short: 1, label: 'ECMWF mean period' },
+      { key: G + '.swell_wave_period', run: G, label: 'GFS swell period', color: '--gfs' }]), { sync: 'loc' });
+    mk('c-wind', L.t, lines([
+      { key: I + '.wind_speed_10m', run: I, label: 'ECMWF wind', color: '--ecmwf' },
+      { key: I + '.wind_gusts_10m', run: I, label: 'ECMWF gust', color: '--ecmwf', dash: [4, 4] },
+      { key: I + '.wind_speed_10m|short', run: I, short: 1, label: 'ECMWF wind' },
+      { key: I + '.wind_gusts_10m|short', run: I, short: 1, label: 'ECMWF gust', dash: [4, 4] },
+      { key: F + '.wind_speed_10m', run: F, label: 'GFS wind', color: '--gfs' },
+      { key: F + '.wind_gusts_10m', run: F, label: 'GFS gust', color: '--gfs', dash: [4, 4] }]), { sync: 'loc' });
+  }
+
+  // ---- forecast fan -------------------------------------------------------------
+  function loadFan() {
+    var loc = $('loc').value;
+    if (fanCache[loc]) return Promise.resolve(fanCache[loc]);
+    return fetch('fan_' + loc + '.json').then(function (r) { return r.json(); }).then(function (j) { fanCache[loc] = j; return j; });
+  }
+
+  function bestValid(F) {
+    // default to the past valid time with the most runs behind it, so the fan has something to show
+    var parts = $('fvar').value.split('.'), src = parts[0], v = parts[1], now = Date.now() / 1000;
+    var best = -1, bi = F.valid.length - 1;
+    F.valid.forEach(function (t, i) {
+      if (t > now) return;
+      var n = 0;
+      S.models[src].forEach(function (m) { ((F.v[src + '.' + m + '.' + v] || [])[i] || []).forEach(function (x) { if (x !== null) n++; }); });
+      if (n >= best) { best = n; bi = i; }
+    });
+    return F.valid[bi];
+  }
+
+  function fillValid(F, reset) {
+    var sel = $('fvalid'), keep = sel.value;
+    sel.innerHTML = '';
+    F.valid.slice().reverse().forEach(function (t) {
+      var o = document.createElement('option'); o.value = t; o.textContent = fmtT(t); sel.appendChild(o);
+    });
+    var have = Array.prototype.some.call(sel.options, function (o) { return o.value === keep; });
+    sel.value = (!reset && keep && have) ? keep : String(bestValid(F));
+  }
+
+  function renderFan() {
+    var F = fanCache[$('loc').value];
+    if (!F || !F.valid.length) { clear('c-fan'); $('fan-note').textContent = 'No archived runs yet for this location.'; return; }
+    var parts = $('fvar').value.split('.'), src = parts[0], v = parts[1];
+    var vi = F.valid.indexOf(Number($('fvalid').value));
+    if (vi < 0) vi = F.valid.length - 1;
+    var x = F.leads.map(function (l) { return -l; }).reverse();
+    var ys = S.models[src].map(function (m) {
+      var row = ((F.v[src + '.' + m + '.' + v] || [])[vi] || []).slice();
+      // lead times this model cannot supply (06z/18z runs end at ~6 days) are undefined, which
+      // uPlot spans; a missing run that should exist is null, which breaks the line.
+      (F.absent[src + '.' + m] || []).forEach(function (i) { if (row[i] === null) row[i] = undefined; });
+      var ec = m.indexOf('ecmwf') === 0;
+      return { label: ec ? 'ECMWF' : 'GFS', color: ec ? '--ecmwf' : '--gfs', data: row.reverse() };
+    });
+    mk('c-fan', x, ys, { num: true, points: true, sync: 'fan', xvals: function (u, vals) { return vals.map(function (a) { return Math.abs(a) + ' h'; }); } });
+    $('fan-note').textContent = 'x axis: hours of lead time before the valid time (240 h = 10 days ahead, 0 = analysis). Runs are 6-hourly. ECMWF 06z/18z runs reach only ~6 days, so beyond that ECMWF has a point every 12 h and the line runs across the missing steps; a break in a line means a run is missing from the archive.';
+  }
+
+  // ---- status ---------------------------------------------------------------------
+  function td(tr, text, cls) { var c = document.createElement('td'); c.textContent = text; if (cls) c.className = cls; tr.appendChild(c); return c; }
+
+  function renderStatus() {
+    var tb = $('hosts').tBodies[0]; tb.innerHTML = '';
+    S.hosts.forEach(function (h) {
+      var a = ageH(h.last_fetch), cls = a === null ? 'bad' : a > 14 ? 'bad' : a > 8 ? 'warn' : 'ok', tr = document.createElement('tr');
+      td(tr, h.host);
+      td(tr, fmtIso(h.last_fetch) + (a === null ? '' : ' (' + a.toFixed(1) + ' h ago)'), cls);
+      td(tr, fmtIso(h.last_complete));
+      td(tr, h.fetches_24h + ' / ' + h.fetches);
+      td(tr, h.last_ok === null ? '-' : h.last_ok + ' ok / ' + h.last_failed + ' failed');
+      tb.appendChild(tr);
+    });
+
+    var cb = $('comp').tBodies[0]; cb.innerHTML = '';
+    var bad = 0, warn = 0, foot = {};
+    S.completeness.forEach(function (c) {
+      if (c.status === 'bad') bad++; else if (c.status === 'warn') warn++;
+      var tr = document.createElement('tr');
+      td(tr, NAMES[c.model] || c.model);
+      td(tr, c.loc);
+      td(tr, c.run ? fmtRun(c.run) : 'none', c.run ? '' : 'bad');
+      td(tr, c.age_h === null ? '-' : c.age_h + ' h');
+      td(tr, c.run ? String(c.steps) : '-');
+      td(tr, c.run ? days(c.horizon_h) : '-');
+      td(tr, c.null_pct === null ? '-' : c.null_pct + '%', c.null_pct > 5 ? 'warn' : '');
+      td(tr, c.req.join(' / '), c.req[1] ? 'bad' : (c.req[2] ? 'warn' : ''));
+      td(tr, c.why.length ? c.why.join('; ') : 'ok', 'why ' + c.status);
+      cb.appendChild(tr);
+      c.notes.forEach(function (n) { foot[(NAMES[c.model] || c.model) + ': ' + n] = 1; });
+    });
+    var n = S.completeness.length;
+    var note = $('comp-note');
+    note.className = 'note ' + (bad ? 'bad' : warn ? 'warn' : 'ok');
+    note.textContent = bad || warn ? (bad + ' of ' + n + ' series need attention, ' + warn + ' have warnings (open the table).') : 'All ' + n + ' series complete.';
+    $('comp-details').open = !!(bad || warn);
+    $('comp-foot').textContent = Object.keys(foot).length ? 'By design: ' + Object.keys(foot).join(' | ') + '.' : '';
+
+    var gb = $('gaps').tBodies[0]; gb.innerHTML = '';
+    var w = S.window || {};
+    $('gap-note').textContent = S.gaps.length ? 'Model runs inside the run window (' + fmtIso(w.start) + ' to ' + fmtIso(w.end) + ' UTC) with no archived data from any host.' :
+      'No gaps found' + (w.start && Date.now() < Date.parse(w.start) ? ' (run window has not started yet: ' + fmtIso(w.start) + ' UTC).' : '.');
+    S.gaps.forEach(function (g) {
+      var tr = document.createElement('tr');
+      td(tr, NAMES[g.model] || g.model); td(tr, fmtIso(g.from)); td(tr, fmtIso(g.to)); td(tr, String(g.count));
+      gb.appendChild(tr);
+    });
+  }
+
+  function onLoc() { renderLatest(); loadFan().then(function (F) { fillValid(F, true); renderFan(); }); }
+
+  function init(summary) {
+    S = summary;
+    $('gen').textContent = 'Updated ' + fmtIso(S.generated) + ' UTC.';
+    var sel = $('loc');
+    S.locations.forEach(function (l) { var o = document.createElement('option'); o.value = l.id; o.textContent = l.name; sel.appendChild(o); });
+    sel.onchange = onLoc;
+    $('fvar').onchange = function () { var F = fanCache[$('loc').value]; if (F) fillValid(F, true); renderFan(); };
+    $('fvalid').onchange = renderFan;
+    renderStatus(); onLoc();
+    var redraw = function () { renderLatest(); renderFan(); };
+    var timer; window.addEventListener('resize', function () { clearTimeout(timer); timer = setTimeout(redraw, 150); });
+    if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', redraw);
+  }
+
+  if (typeof uPlot === 'undefined') { $('err').style.display = 'block'; }
+  fetch('summary.json').then(function (r) { return r.json(); }).then(init).catch(function () { $('err').style.display = 'block'; });
+})();
+</script>
+</body>
+</html>
